@@ -39,6 +39,11 @@ def fetch_page_html(url):
         
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            
+            # --- UNSER NEUER SPION ---
+            print(f"[*] Erfolgreich geladen! Der Titel der Seite lautet: '{page.title()}'")
+            # -------------------------
+            
             html = page.content()
         except Exception as e:
             print(f"Fehler beim Laden von {url}: {e}")
@@ -52,6 +57,7 @@ def run_scan():
     current_products = {}
     
     try:
+        print("[*] Starte neuen Suchlauf...")
         for current_url in URLS:
             html = fetch_page_html(current_url)
             if not html:
