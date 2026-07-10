@@ -1,6 +1,7 @@
 import os
 import gc
 import requests
+import threading
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -21,50 +22,38 @@ def send_telegram_notification(message):
     requests.post(telegram_url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message})
 
 def fetch_page_html(url):
-    """Startet Chrome, holt den reinen Text und schließt Chrome sofort wieder, um RAM zu sparen."""
     html = ""
     with sync_playwright() as p:
-        # EXTREM-DIÄT für Chromium
         browser = p.chromium.launch(
             headless=True,
             args=[
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--single-process',
-                '--no-zygote'
+                '--disable-gpu'
             ]
         )
-        # Sehr kleines Fenster simulieren
         context = browser.new_context(viewport={"width": 800, "height": 600})
         page = context.new_page()
-        
-        # Blockiere ALLES außer reinem HTML und Skripten (auch CSS wird geblockt)
         page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_())
         
         try:
-            # "domcontentloaded" ist schneller als "networkidle" und spart Speicher
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             html = page.content()
         except Exception as e:
             print(f"Fehler beim Laden von {url}: {e}")
         finally:
-            browser.close() # Browser SOFORT killen!
+            browser.close()
             
     return html
 
-@app.route('/')
-def check_site():
+def run_scan():
     global known_products
-    new_alerts = 0
     current_products = {}
     
     try:
-        # Jeden Link EINZELN abarbeiten
         for current_url in URLS:
             html = fetch_page_html(current_url)
-            
             if not html:
                 continue
                 
@@ -80,25 +69,27 @@ def check_site():
                         "available": not bool(status_elem),
                         "link": current_url
                     }
-            
-            # Python zwingen, den RAM SOFORT wieder freizugeben
             gc.collect()
 
         if not known_products:
             known_products = set(current_products.keys())
-            return f"Erster Check fertig. {len(known_products)} Produkte gefunden."
+            print(f"Initialisierung: {len(known_products)} Produkte gefunden.")
+            return
 
         for title, data in current_products.items():
             if title not in known_products:
                 known_products.add(title)
                 if data["available"]:
                     send_telegram_notification(f"🚨 NEUES PRODUKT:\n{title}\n\nLink: {data['link']}")
-                    new_alerts += 1
-            
-        return f"Check abgeschlossen. {new_alerts} neue Produkte gefunden."
-        
+                    
     except Exception as e:
-        return f"Fehler aufgetreten: {e}"
+        print(f"Fehler im Hintergrund-Scan: {e}")
+
+@app.route('/')
+def trigger_scan():
+    thread = threading.Thread(target=run_scan)
+    thread.start()
+    return "Scan im Hintergrund erfolgreich gestartet!", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
