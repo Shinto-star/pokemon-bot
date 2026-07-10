@@ -1,4 +1,3 @@
-Plaintext
 playwright==1.40.0
 beautifulsoup4
 requests
