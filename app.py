@@ -6,7 +6,6 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# Hier kannst du beliebig viele Links mit einem Komma getrennt eintragen
 URLS = [
     "https://www.pokemoncenter.com/en-de/category/trading-card-game?category=tcg-cards",
     "https://www.pokemoncenter.com/en-gb/category/elite-trainer-box"
@@ -27,7 +26,16 @@ def check_site():
         new_alerts = 0
         
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            # SPEICHER-OPTIMIERUNG 1: Chrome im absoluten Minimal-Modus starten
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu'
+                ]
+            )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 viewport={"width": 1920, "height": 1080}
@@ -35,12 +43,15 @@ def check_site():
             
             current_products = {}
             
-            # Beide Links nacheinander scannen
             for current_url in URLS:
                 page = context.new_page()
+                
+                # SPEICHER-OPTIMIERUNG 2: Alle Bilder, Videos und Schriftarten blockieren!
+                page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_())
+                
                 page.goto(current_url, wait_until="networkidle", timeout=60000)
                 html = page.content()
-                page.close()
+                page.close() # Tab sofort schließen, um Speicher freizugeben
                 
                 soup = BeautifulSoup(html, 'html.parser')
                 products = soup.find_all('div', class_='product-card') 
@@ -50,7 +61,6 @@ def check_site():
                     status_elem = prod.find('span', class_='out-of-stock') 
                     if title_elem:
                         title = title_elem.text.strip()
-                        # Speichert Titel, Verfügbarkeit UND den dazugehörigen Link
                         current_products[title] = {
                             "available": not bool(status_elem),
                             "link": current_url
@@ -58,12 +68,10 @@ def check_site():
             
             browser.close()
 
-            # Erste Ausführung: Alle gefundenen Produkte von beiden Seiten abspeichern
             if not known_products:
                 known_products = set(current_products.keys())
-                return f"Erster Check fertig. {len(known_products)} Produkte auf beiden Seiten gefunden."
+                return f"Erster Check fertig. {len(known_products)} Produkte gefunden."
 
-            # Ab dem zweiten Lauf: Prüfen, was neu dazugekommen ist
             for title, data in current_products.items():
                 if title not in known_products:
                     known_products.add(title)
@@ -71,7 +79,7 @@ def check_site():
                         send_telegram_notification(f"🚨 NEUES PRODUKT:\n{title}\n\nLink: {data['link']}")
                         new_alerts += 1
                 
-            return f"5-Minuten-Check abgeschlossen. {new_alerts} neue Produkte gefunden."
+            return f"Check abgeschlossen. {new_alerts} neue Produkte gefunden."
             
     except Exception as e:
         return f"Fehler aufgetreten: {e}"
